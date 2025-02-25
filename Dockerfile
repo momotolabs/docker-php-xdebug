@@ -1,34 +1,110 @@
-FROM php:8.3-fpm
-RUN apt update && apt install -y unixodbc-dev gpg libzip-dev
-RUN apt install git build-essential libltdl-dev libpng-dev libjpeg-dev libtiff-dev -y
+FROM php:8.3-fpm-alpine
 
+ARG USERNAME=docker
 
-RUN apt install ghostscript -y
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs
+# Add required packages and PHP extensions
+RUN apk add --no-cache --virtual .build-deps \
+        $PHPIZE_DEPS \
+        linux-headers \
+        git \
+        # PHP extension dependencies
+        libzip-dev \
+        libpng-dev \
+        libjpeg-turbo-dev \
+        freetype-dev \
+        libxml2-dev \
+        oniguruma-dev \
+        curl-dev \
+        openssl-dev \
+        # Chromium dependencies
+        chromium \
+        nss \
+        freetype \
+        freetype-dev \
+        harfbuzz \
+        ca-certificates \
+        ttf-freefont \
+        nodejs \
+        npm \
+    # Install permanent runtime dependencies
+    && apk add --no-cache \
+        libzip \
+        libpng \
+        libjpeg-turbo \
+        libxml2 \
+        icu-dev \
+        icu-libs \
+        mysql-client \
+        openssh \
+    # Configure and install PHP extensions
+    && docker-php-ext-configure gd --with-freetype --with-jpeg \
+    && docker-php-ext-install -j$(nproc) \
+        bcmath \
+        calendar \
+        exif \
+        gd \
+        intl \
+        mysqli \
+        opcache \
+        pdo \
+        pdo_mysql \
+        pcntl \
+        zip \
+    # Install PECL extensions
+    && pecl install \
+        redis-6.0.2 \
+        xdebug \
+    && docker-php-ext-enable \
+        redis \
+        xdebug \
+    # Install Puppeteer and configure Chrome
+    && npm install --global --unsafe-perm puppeteer@^17 \
+    && mkdir -p /usr/local/share/chrome \
+    && ln -s /usr/bin/chromium-browser /usr/local/share/chrome/chrome \
+    && ln -s /usr/bin/chromium-browser /usr/local/share/chrome/chromium \
+    # Cleanup
+    && apk del .build-deps \
+    && rm -rf /var/cache/apk/* \
+        /tmp/* \
+        /var/tmp/* \
+        /usr/share/doc/* \
+        /usr/share/man/*
 
-RUN apt install -y gconf-service libasound2 libatk1.0-0 libc6 libcairo2 libcups2 libdbus-1-3 libexpat1 libfontconfig1 libgbm1 libgcc1 libgconf-2-4 libgdk-pixbuf2.0-0 libglib2.0-0 libgtk-3-0 libnspr4 libpango-1.0-0 libpangocairo-1.0-0 libstdc++6 libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxcursor1 libxdamage1 libxext6 libxfixes3 libxi6 libxrandr2 libxrender1 libxss1 libxtst6 ca-certificates fonts-liberation libappindicator1 libnss3 lsb-release xdg-utils wget libgbm-dev libxshmfence-dev \
- && npm install --location=global --unsafe-perm puppeteer@^17 \
- && chmod -R o+rx /usr/lib/node_modules/puppeteer/.local-chromium
+# Optimize PHP-FPM and OPcache for production
+RUN { \
+        echo 'opcache.memory_consumption=128'; \
+        echo 'opcache.interned_strings_buffer=8'; \
+        echo 'opcache.max_accelerated_files=4000'; \
+        echo 'opcache.revalidate_freq=2'; \
+        echo 'opcache.fast_shutdown=1'; \
+        echo 'opcache.enable_cli=1'; \
+    } > /usr/local/etc/php/conf.d/opcache-recommended.ini
 
-RUN docker-php-ext-install mysqli pdo pdo_mysql && docker-php-ext-enable pdo_mysql
-RUN pecl install xdebug
-RUN docker-php-ext-enable xdebug
-RUN apt autoremove && apt clean
-ADD ./custom-php.ini /usr/local/etc/php/conf.d/custom-php.ini
-ADD ./xdebug-php.ini /usr/local/etc/php/conf.d/xdebug-php.ini
-ADD ./www.conf /usr/local/etc/php-fpm.d/www.conf
+# Configure php.ini for production
+RUN cp /usr/local/etc/php/php.ini-production /usr/local/etc/php/php.ini
 
-ENV USERNAME=docker
+# Add configuration files
+COPY --chown=$USERNAME:www-data custom-php.ini /usr/local/etc/php/conf.d/
+COPY --chown=$USERNAME:www-data xdebug-php.ini /usr/local/etc/php/conf.d/
+COPY --chown=$USERNAME:www-data www.conf /usr/local/etc/php-fpm.d/
 
-
-RUN adduser $USERNAME \
-    && usermod -aG www-data $USERNAME \
+# Set up user and permissions
+RUN adduser -D -u 1000 $USERNAME \
+    && addgroup $USERNAME www-data \
     && chown -R $USERNAME:www-data /var/www/html \
     && chmod -R g+w /var/www/html
 
 WORKDIR /var/www/html/
+
+# Install Composer
+COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
+
+# Copy application files
 COPY --chown=$USERNAME:www-data . .
+
 USER $USERNAME
-# Exponer el puerto para el servidor web
+
+# Healthcheck for PHP-FPM
+HEALTHCHECK --interval=30s --timeout=3s CMD php-fpm -t || exit 1
+
 EXPOSE 9000
