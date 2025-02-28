@@ -16,26 +16,25 @@ RUN apk add --no-cache --virtual .build-deps \
         oniguruma-dev \
         curl-dev \
         openssl-dev \
-        # Chromium dependencies
-        chromium \
-        nss \
-        freetype \
-        freetype-dev \
-        harfbuzz \
-        ca-certificates \
-        ttf-freefont \
-        nodejs \
-        npm \
     # Install permanent runtime dependencies
     && apk add --no-cache \
         libzip \
         libpng \
         libjpeg-turbo \
+        freetype \
         libxml2 \
         icu-dev \
         icu-libs \
         mysql-client \
         openssh \
+        nodejs \
+        npm \
+        # Chromium dependencies
+        chromium \
+        nss \
+        harfbuzz \
+        ca-certificates \
+        ttf-freefont \
     # Configure and install PHP extensions
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install -j$(nproc) \
@@ -62,7 +61,7 @@ RUN apk add --no-cache --virtual .build-deps \
     && mkdir -p /usr/local/share/chrome \
     && ln -s /usr/bin/chromium-browser /usr/local/share/chrome/chrome \
     && ln -s /usr/bin/chromium-browser /usr/local/share/chrome/chromium \
-    # Cleanup
+    # Cleanup (but preserve runtime libs)
     && apk del .build-deps \
     && rm -rf /var/cache/apk/* \
         /tmp/* \
