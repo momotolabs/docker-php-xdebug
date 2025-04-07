@@ -55,7 +55,6 @@ RUN apk add --no-cache --virtual .build-deps \
         xdebug \
     && docker-php-ext-enable \
         redis \
-        xdebug \
     # Install Puppeteer and configure Chrome
     && npm install --global --unsafe-perm puppeteer@^17 \
     && mkdir -p /usr/local/share/chrome \
@@ -84,7 +83,7 @@ RUN cp /usr/local/etc/php/php.ini-production /usr/local/etc/php/php.ini
 
 # Add configuration files
 COPY --chown=$USERNAME:www-data custom-php.ini /usr/local/etc/php/conf.d/
-COPY --chown=$USERNAME:www-data xdebug-php.ini /usr/local/etc/php/conf.d/
+COPY --chown=$USERNAME:www-data xdebug-php.ini /usr/local/etc/php/conf.d/xdebug-php.ini.disabled
 COPY --chown=$USERNAME:www-data www.conf /usr/local/etc/php-fpm.d/
 
 # Set up user and permissions
@@ -92,6 +91,10 @@ RUN adduser -D -u 1000 $USERNAME \
     && addgroup $USERNAME www-data \
     && chown -R $USERNAME:www-data /var/www/html \
     && chmod -R g+w /var/www/html
+
+# Create entrypoint script to handle Xdebug activation/deactivation
+COPY --chown=root:root docker-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 WORKDIR /var/www/html/
 
@@ -101,9 +104,10 @@ COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 # Copy application files
 COPY --chown=$USERNAME:www-data . .
 
-USER $USERNAME
-
 # Healthcheck for PHP-FPM
 HEALTHCHECK --interval=30s --timeout=3s CMD php-fpm -t || exit 1
 
 EXPOSE 9000
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["php-fpm"]
