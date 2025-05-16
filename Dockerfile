@@ -1,7 +1,5 @@
-FROM php:8.3-fpm-alpine
-
+FROM php:8.4-fpm-alpine
 ARG USERNAME=docker
-
 # Add required packages and PHP extensions
 RUN apk add --no-cache --virtual .build-deps \
         $PHPIZE_DEPS \
@@ -16,6 +14,8 @@ RUN apk add --no-cache --virtual .build-deps \
         oniguruma-dev \
         curl-dev \
         openssl-dev \
+        # ImageMagick dependencies
+        imagemagick-dev \
     # Install permanent runtime dependencies
     && apk add --no-cache \
         libzip \
@@ -29,12 +29,15 @@ RUN apk add --no-cache --virtual .build-deps \
         openssh \
         nodejs \
         npm \
+        # ImageMagick runtime
+        imagemagick \
         # Chromium dependencies
         chromium \
         nss \
         harfbuzz \
         ca-certificates \
         ttf-freefont \
+     libcap\
     # Configure and install PHP extensions
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install -j$(nproc) \
@@ -49,25 +52,21 @@ RUN apk add --no-cache --virtual .build-deps \
         pdo_mysql \
         pcntl \
         zip \
-    # Install PECL extensions
+    # Install PECL extensions including Imagick
     && pecl install \
-        redis-6.0.2 \
+        redis \
         xdebug \
+        imagick \
     && docker-php-ext-enable \
         redis \
-    # Install Puppeteer and configure Chrome
-    && npm install --global --unsafe-perm puppeteer@^17 \
-    && mkdir -p /usr/local/share/chrome \
-    && ln -s /usr/bin/chromium-browser /usr/local/share/chrome/chrome \
-    && ln -s /usr/bin/chromium-browser /usr/local/share/chrome/chromium \
-    # Cleanup (but preserve runtime libs)
+        xdebug \
+        imagick \
     && apk del .build-deps \
     && rm -rf /var/cache/apk/* \
         /tmp/* \
         /var/tmp/* \
         /usr/share/doc/* \
         /usr/share/man/*
-
 # Optimize PHP-FPM and OPcache for production
 RUN { \
         echo 'opcache.memory_consumption=128'; \
@@ -77,37 +76,36 @@ RUN { \
         echo 'opcache.fast_shutdown=1'; \
         echo 'opcache.enable_cli=1'; \
     } > /usr/local/etc/php/conf.d/opcache-recommended.ini
-
 # Configure php.ini for production
+RUN CHROMIUM_PATH=$(which chromium || which chromium-browser) && \
+    echo "Chromium path: $CHROMIUM_PATH" && \
+    if [ -f "$CHROMIUM_PATH" ]; then \
+        setcap cap_sys_admin+ep $CHROMIUM_PATH; \
+        echo "ENV PUPPETEER_EXECUTABLE_PATH=\"$CHROMIUM_PATH\"" >> /etc/environment; \
+    else \
+        echo "Chromium executable not found"; \
+        exit 1; \
+    fi
+RUN npm install puppeteer@latest
+RUN npx puppeteer browsers install chrome
 RUN cp /usr/local/etc/php/php.ini-production /usr/local/etc/php/php.ini
-
+ENV PUPPETEER_EXECUTABLE_PATH="/usr/bin/chromium"
 # Add configuration files
 COPY --chown=$USERNAME:www-data custom-php.ini /usr/local/etc/php/conf.d/
-COPY --chown=$USERNAME:www-data xdebug-php.ini /usr/local/etc/php/conf.d/xdebug-php.ini.disabled
+COPY --chown=$USERNAME:www-data xdebug-php.ini /usr/local/etc/php/conf.d/
 COPY --chown=$USERNAME:www-data www.conf /usr/local/etc/php-fpm.d/
-
 # Set up user and permissions
 RUN adduser -D -u 1000 $USERNAME \
     && addgroup $USERNAME www-data \
     && chown -R $USERNAME:www-data /var/www/html \
     && chmod -R g+w /var/www/html
-
-# Create entrypoint script to handle Xdebug activation/deactivation
-COPY --chown=root:root docker-entrypoint.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
-
 WORKDIR /var/www/html/
-
 # Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
-
 # Copy application files
 COPY --chown=$USERNAME:www-data . .
-
+USER $USERNAME
 # Healthcheck for PHP-FPM
 HEALTHCHECK --interval=30s --timeout=3s CMD php-fpm -t || exit 1
-
 EXPOSE 9000
 
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
-CMD ["php-fpm"]
